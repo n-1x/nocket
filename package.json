@@ -1,8 +1,8 @@
 {
-  "name": "snodesocket",
+  "name": "snodesock",
   "version": "1.0.0",
   "description": "A secure websocket module built using only standard library modules.",
-  "main": "snodesocket.js",
+  "main": "snodesock.js",
   "repository": "git@github.com:Fydrenak/snodesock.git",
   "author": "Nicholas J D Dean",
   "license": "MIT",
