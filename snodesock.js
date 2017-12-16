@@ -1,8 +1,9 @@
 //Author: Nicholas J D Dean
 //Date created: 2017-12-07
 
-var tls = require('tls');
-var { URL } = require('url'); //TODO: FIX THIS
+const tls = require('tls');
+const { URL } = require('url'); //TODO: FIX THIS
+const BitStream = require('./BitStream');
 
 module.exports = class wss {
     constructor(serverURL) {
@@ -16,8 +17,23 @@ module.exports = class wss {
 
 
 
+    //allow the registering of events
     on(eventString, callback) {
         this.callbacks[eventString] = callback;
+    }
+
+
+
+    //check if an event has been registered, and
+    //send it if it has
+    propagateEvent(eventString, params) {
+        if (this.callbacks[eventString]) {
+            if (params) {
+                this.callbacks[eventString](params);
+            } else {
+                this.callbacks[eventString]();
+            }
+        }
     }
 
 
@@ -58,17 +74,18 @@ module.exports = class wss {
             if (!this.protocolSwitched) {
                 this.protocolSwitched = true;
                 
-                if (this.callbacks['connected']) {
-                    this.callbacks['connected']();
-                }
-            } else if (this.callbacks['data']) {
+                //now that the protocol is switched
+                //the websocket can now be considered
+                //connected
+                this.propagateEvent('connected');
+            } else {
                 let frames = parseData(data);
 
                 //call the data function for all frames that
                 //were contained within the data fetched from
                 //the socket.
                 for(let i = 0; i < frames.length; ++i) {
-                    this.callbacks['data'](frames[i]);
+                    this.propagateEvent('data', frames[i]);
                 }
             }
         });
@@ -88,9 +105,13 @@ module.exports = class wss {
     //serialises the object as json and sends
     //it through the websocket in a valid data frame.
     write(data, opcode=1) {
-        this.socket.write(buildDataFrame(opcode, data));
+        let df = buildWSFrame(opcode, data);
+
+        this.socket.write(df.toBuffer());
     }
 }
+
+
 
 //generate 16 random bytes and encode them
 //in base64.
@@ -106,111 +127,45 @@ function generateWebSocketKey() {
 
 
 
-//convert a binary string to a buffer. The length of
-//the string must be a multiple of 8 otherwise this will break
-function binStringToBuffer(s) {
-    let array = [];
-    
-    //chunk the string into bytes, parse them as ints into an
-    //array. Put the array into a buffer and read it as a string
-    for (let i = 0; i < s.length; i += 8) {
-        array[Math.floor((i+1) / 8)] = parseInt(s.substr(i, 8), 2);
-    }
-    
-    return Buffer.from(array);
-}
-
-
-
-//convert a buffer to a binary string
-function bufferToBinString(b) {
-    let s = '';
-
-    for(let i = 0; i < b.length; ++i) {
-        let val = b[i].toString(2);
-
-        while (val.length < 8) {
-            val = '0' + val;
-        }
-
-        s += val;
-    }
-
-    return s;
-}
-
-
-
-//apply the 4 byte mask to the buffer. Because of the
-//nature of XOR this can mask and unmask
-function applyMask(buffer, maskingKey) {
-    let newBuffer = [];    
-
-    for(let i = 0; i < buffer.length; ++i) {
-        newBuffer[i] = buffer[i] ^ maskingKey[i % 4];
-    }
-
-    return Buffer.from(newBuffer);
-}
-
-
-
-//return a buffer containing the bytes of a 
+//return a stream containing the bytes of a 
 //valid websocket data frame. Because every message
 //from client to server must be masked, this function
 //always masks the data
-function buildDataFrame(opcode, data) {
-    let dataFrame = '';
-    let payloadBuffer = Buffer.from(JSON.stringify(data));
-    const maskingKey = Buffer.from([12, 34, 56, 78]);
+function buildWSFrame(opcode, data) {
+    const payloadBits = new BitStream();
+    const maskingKey = 0x12345678;
+    const dataFrame = new BitStream();
 
-    dataFrame += '1';   //fin
-    dataFrame += '000'; //rsv
-
-    let opcodeString = opcode.toString(2);
-
-    while(opcodeString.length < 4) {
-        opcodeString = '0' + opcodeString;
-    }
-
-    dataFrame += opcodeString;
-    dataFrame += '1'    //masked
-
-    //write payload length 
-    const payloadLength = payloadBuffer.length;
-    let numBitsForPayloadLength = 7
-
-    //if the payload length needs more than 16 bits
-    if (payloadLength > Math.pow(2, 16) - 1) {
-        dataFrame += '1111111';
-
+    payloadBits.addString(JSON.stringify(data));
+    
+    dataFrame.addBits(1, 1);      //fin
+    dataFrame.addBits(0, 3);      //rsv 
+    dataFrame.addBits(opcode, 4); //opcode
+    dataFrame.addBits(1, 1);      //masked
+    
+    //add the correctly formatted payload length
+    let numBitsForPayloadLength = 7;
+    let payloadNumBytes = payloadBits.numBytes();
+    
+    if (payloadNumBytes > 65535) {
+        dataFrame.addBits(127, 7);
+        
         numBitsForPayloadLength = 64;
-    } else if (payloadLength > Math.pow(2, 7) - 1) {
-        dataFrame += '1111110';
-
+    } else if (payloadNumBytes > 127) {
+        dataFrame.addBits(126, 7);
+        
         numBitsForPayloadLength = 16;
     }
-
-    let payloadLengthString = payloadBuffer.length.toString(2);
+    dataFrame.addBits(payloadNumBytes, numBitsForPayloadLength);
     
-    //add leading zeroes, this needs to occupy 7 bits
-    while(payloadLengthString.length < numBitsForPayloadLength) {
-        payloadLengthString = '0' + payloadLengthString;
-    }
+    //add 4 bytes for the masking key
+    dataFrame.addBits(maskingKey, 32);
     
-    //add the payload length to the string
-    dataFrame += payloadLengthString;
-    
-    //add the masking key to the string
-    dataFrame += bufferToBinString(maskingKey);
+    //apply the mask and add the payload
+    payloadBits.xor(maskingKey, 32);
 
-    //mask the payload
-    let maskedPayload = applyMask(payloadBuffer, maskingKey);
-
-    //add the masked payload to the string
-    dataFrame += bufferToBinString(maskedPayload);
-
-    return binStringToBuffer(dataFrame);
+    dataFrame.append(payloadBits);
+    return dataFrame;
 }
 
 
@@ -219,13 +174,14 @@ function buildDataFrame(opcode, data) {
 //the tls, this function extracts all the data frames and
 //returns them in an array.
 function parseData(data) {
+    let stream = new BitStream();
     let frames = [];
 
-    let binary = bufferToBinString(data)
+    stream.fromBuffer(data);
+    let binary = stream.binary;
 
     while(binary.length > 0) {
         const obj = parseDataFrame(binary);
-
         frames.push(obj.frame);
         binary = obj.remainingData;
     }
@@ -289,13 +245,17 @@ function parseDataFrame(binString) {
     //key, then interpret the payload
     if (frame.masked) {
         //next 32 bits are the masking key
-        frame.maskingKey = binStringToBuffer(binString.substr(currentBit, 32));
+        frame.maskingKey = parseInt(binString.substr(currentBit, 32), 2);
         currentBit += 32;
     } 
 
     //read the payload <actualPayloadLength> more bits.
     let payloadBinString = binString.substr(currentBit, payloadLength * 8);
-    frame.payload = binStringToBuffer(payloadBinString).toString();
+    let payload = new BitStream();
+
+    payload.binary += payloadBinString;
+    frame.payload = payload.toBuffer().toString();
+
     currentBit += payloadLength * 8;
 
     return {
