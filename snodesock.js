@@ -26,7 +26,7 @@ module.exports = class wss {
 
     //check if an event has been registered, and
     //send it if it has
-    propagateEvent(eventString, params) {
+    _propagateEvent(eventString, params) {
         if (this.callbacks[eventString]) {
             if (params) {
                 this.callbacks[eventString](params);
@@ -77,7 +77,7 @@ module.exports = class wss {
                 //now that the protocol is switched
                 //the websocket can now be considered
                 //connected
-                this.propagateEvent('connected');
+                this._propagateEvent('connected');
             } else {
                 let frames = parseData(data);
 
@@ -85,15 +85,37 @@ module.exports = class wss {
                 //were contained within the data fetched from
                 //the socket.
                 for(let i = 0; i < frames.length; ++i) {
-                    this.propagateEvent('data', frames[i]);
+                    switch (frames[i].opcode) {
+                        case 1: //text frame
+                            this._propagateEvent('data', frames[i].payload);
+                            break;
+
+                        case 8: //disconnect frame
+                            this._propagateEvent('host_disconnect', frames[i].payload);
+                            break;
+
+                        default:
+                            console.log(
+                                'SOCKET ERROR: Unknown opcode received: ' + 
+                                frames[i].opcode
+                            );
+                            console.log(JSON.stringify(frames[i], null, 2));
+                            break;
+                    }
                 }
             }
         });
 
         sock.on('end', () => {
-            if (this.callbacks['end']) {
-                this.callbacks['end']();
-            }
+            this._propagateEvent('end');
+        });
+
+        sock.on('close', () => {
+            this._propagateEvent('close');
+        });
+
+        sock.on('error', () => {
+            this._propagateEvent('error');
         });
 
         this.socket = sock;
