@@ -266,7 +266,9 @@ function handleMessage(client, opcode, payload) {
             break;
 
         default:
-            throw { msg: 'unhandled opcode ' + opcode };
+            console.error("Hit unhandled opcode " + opcode);
+            console.error("with payload\n--------------\n" + payload.toString());
+            console.error("-----------");
     }
 }
 
