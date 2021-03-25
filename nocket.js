@@ -378,8 +378,8 @@ function parseFrame(bytes) {
     }
     else if (payloadLen === 127) {
         extendedPayloadSize = 8;
-        payloadLen = bytes.readBigUInt64BE(bytesRead,
-            bytesRead + extendedPayloadSize);
+        payloadLen = Number(bytes.readBigUInt64BE(bytesRead,
+            bytesRead + extendedPayloadSize));
     }
 
     bytesRead += extendedPayloadSize;
@@ -387,16 +387,15 @@ function parseFrame(bytes) {
 
     if (mask === 1) {
         maskingKey = bytes.slice(bytesRead, bytesRead + 4);
-        bytesRead += 4;
+        bytesRead += 4n;
     }
 
     //read the payload using either extended or standard length
-    const payloadEndByte = bytesRead + payloadLen;
+    const payloadEndByte = bytesRead + Number(payloadLen);
     const payload = bytes.slice(bytesRead, payloadEndByte);
     let remainingToRead = null;
 
     if (payloadEndByte > bytes.length) {
-        console.log("Received partial frame");
         remainingToRead = payloadEndByte - bytes.length;
     }
 
